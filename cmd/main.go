@@ -39,8 +39,6 @@ func main() {
 	
 	router.HandleFunc("/{shortCode}", urlHandler.RedirectURL).Methods("GET")
 
-	router.HandleFunc("/{shortCode}", urlHandler.RedirectURL).Methods("GET")
-
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
