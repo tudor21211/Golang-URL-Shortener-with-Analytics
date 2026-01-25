@@ -35,6 +35,7 @@ func main() {
 
 	router.HandleFunc("/", urlHandler.HomePage).Methods("GET")
 	router.HandleFunc("/dashboard", urlHandler.Dashboard).Methods("GET")
+	router.HandleFunc("/analytics/{shortCode}", urlHandler.AnalyticsPage).Methods("GET")
 	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./web/static/"))))
 	
 	router.HandleFunc("/{shortCode}", urlHandler.RedirectURL).Methods("GET")

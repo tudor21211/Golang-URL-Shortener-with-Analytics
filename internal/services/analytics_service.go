@@ -2,7 +2,10 @@ package services
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"time"
 
 	"url-shortener/internal/database"
 	"url-shortener/internal/models"
@@ -111,9 +114,9 @@ func (s *AnalyticsService) getUniqueVisitors(shortCode string) (int, error) {
 
 func (s *AnalyticsService) getClicksByCountry(shortCode string) (map[string]int, error) {
 	query := `
-		SELECT country, COUNT(*) as count 
+		SELECT COALESCE(country, 'Unknown') as country, COUNT(*) as count 
 		FROM clicks 
-		WHERE url_short_code = ? AND country != ''
+		WHERE url_short_code = ? AND COALESCE(country, 'Unknown') != ''
 		GROUP BY country 
 		ORDER BY count DESC
 		LIMIT 10
@@ -140,7 +143,7 @@ func (s *AnalyticsService) getClicksByCountry(shortCode string) (map[string]int,
 
 func (s *AnalyticsService) getClicksByDay(shortCode string, days int) ([]models.DailyClicks, error) {
 	query := `
-		SELECT DATE(clicked_at) as date, COUNT(*) as count
+		SELECT COALESCE(DATE(clicked_at), '') as date, COUNT(*) as count
 		FROM clicks 
 		WHERE url_short_code = ? AND clicked_at >= datetime('now', '-' || ? || ' days')
 		GROUP BY DATE(clicked_at)
@@ -168,7 +171,12 @@ func (s *AnalyticsService) getClicksByDay(shortCode string, days int) ([]models.
 
 func (s *AnalyticsService) getRecentClicks(shortCode string, limit int) ([]models.Click, error) {
 	query := `
-		SELECT id, url_short_code, ip_address, user_agent, referer, country, city, clicked_at
+		SELECT id, url_short_code, ip_address, 
+		       COALESCE(user_agent, '') as user_agent, 
+		       COALESCE(referer, '') as referer, 
+		       COALESCE(country, 'Unknown') as country, 
+		       COALESCE(city, 'Unknown') as city, 
+		       clicked_at
 		FROM clicks 
 		WHERE url_short_code = ?
 		ORDER BY clicked_at DESC
@@ -195,10 +203,73 @@ func (s *AnalyticsService) getRecentClicks(shortCode string, limit int) ([]model
 	return clicks, nil
 }
 
+type ipAPIResponse struct {
+	Country string `json:"country"`
+	City    string `json:"city"`
+	Status  string `json:"status"`
+}
 
 func (s *AnalyticsService) GetLocationFromIP(ip string) (country, city string) {
-	if ip == "127.0.0.1" || ip == "::1" {
+	// Handle localhost
+	if ip == "127.0.0.1" || ip == "::1" || ip == "" || ip == "localhost" {
 		return "Local", "Local"
 	}
-	return "Unknown", "Unknown"
+
+	// Skip private IP ranges
+	if isPrivateIP(ip) {
+		return "Local Network", "Local Network"
+	}
+
+	// Call free IP geolocation API
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+	
+	url := fmt.Sprintf("http://ip-api.com/json/%s", ip)
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Printf("Error fetching location for IP %s: %v\n", ip, err)
+		return "Unknown", "Unknown"
+	}
+	defer resp.Body.Close()
+
+	var data ipAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		fmt.Printf("Error decoding response for IP %s: %v\n", ip, err)
+		return "Unknown", "Unknown"
+	}
+
+	if data.Status != "success" {
+		fmt.Printf("API returned non-success status for IP %s: %s\n", ip, data.Status)
+		return "Unknown", "Unknown"
+	}
+
+	country = data.Country
+	city = data.City
+	
+	if country == "" {
+		country = "Unknown"
+	}
+	if city == "" {
+		city = "Unknown"
+	}
+
+	fmt.Printf("Location for IP %s: %s, %s\n", ip, city, country)
+	return country, city
+}
+
+func isPrivateIP(ip string) bool {
+	// Check for common private IP prefixes
+	privateRanges := []string{
+		"10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.",
+		"172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+		"172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+	}
+	
+	for _, prefix := range privateRanges {
+		if len(ip) >= len(prefix) && ip[:len(prefix)] == prefix {
+			return true
+		}
+	}
+	return false
 }

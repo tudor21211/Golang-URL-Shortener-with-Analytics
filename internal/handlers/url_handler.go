@@ -128,33 +128,6 @@ func (h *URLHandler) GetUserURLs(w http.ResponseWriter, r *http.Request) {
 	h.respondWithJSON(w, http.StatusOK, urls)
 }
 
-func (h *URLHandler) GenerateQRCode(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	shortCode := vars["shortCode"]
-
-	if shortCode == "" {
-		h.respondWithError(w, http.StatusBadRequest, "Missing short code", "")
-		return
-	}
-
-	_, err := h.urlService.GetOriginalURL(shortCode)
-	if err != nil {
-		h.respondWithError(w, http.StatusNotFound, "URL not found", err.Error())
-		return
-	}
-
-	shortURL := fmt.Sprintf("%s://%s/%s", h.getScheme(r), r.Host, shortCode)
-
-	png, err := qrcode.Encode(shortURL, qrcode.Medium, 256)
-	if err != nil {
-		h.respondWithError(w, http.StatusInternalServerError, "Failed to generate QR code", err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s-qr.png", shortCode))
-	w.Write(png)
-}
 
 func (h *URLHandler) GenerateQRCode(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -332,7 +305,7 @@ func (h *URLHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
                 <td>{{.ClickCount}}</td>
                 <td>{{.CreatedAt.Format "Jan 2, 2006 15:04"}}</td>
                 <td>
-                    <a href="/api/v1/analytics/{{.ShortCode}}" class="analytics-btn" target="_blank">Analytics</a>
+                    <a href="/analytics/{{.ShortCode}}" class="analytics-btn">Analytics</a>
                     <a href="/api/v1/qr/{{.ShortCode}}" class="qr-btn" target="_blank">QR Code</a>
                 </td>
             </tr>
@@ -349,6 +322,179 @@ func (h *URLHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	t.Execute(w, urls)
 }
 
+func (h *URLHandler) AnalyticsPage(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	shortCode := vars["shortCode"]
+
+	if shortCode == "" {
+		http.Error(w, "Missing short code", http.StatusBadRequest)
+		return
+	}
+
+	// First check if the URL exists
+	_, err := h.urlService.GetOriginalURL(shortCode)
+	if err != nil {
+		http.Error(w, "Short code not found", http.StatusNotFound)
+		return
+	}
+
+	// Get analytics (even if no clicks yet)
+	analytics, err := h.analyticsService.GetAnalytics(shortCode)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error fetching analytics: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Analytics - {{.URL.ShortCode}}</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+        .header { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header h1 { margin: 0 0 10px 0; color: #333; }
+        .header .url-info { color: #666; font-size: 14px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-card h3 { margin: 0 0 10px 0; color: #666; font-size: 14px; font-weight: normal; }
+        .stat-card .value { font-size: 36px; font-weight: bold; color: #007bff; margin: 0; }
+        .section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .section h2 { margin: 0 0 20px 0; color: #333; font-size: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background-color: #f8f9fa; color: #666; font-weight: 600; }
+        .country-bar { display: flex; align-items: center; margin: 10px 0; }
+        .country-name { width: 100px; font-weight: 500; }
+        .bar-container { flex: 1; background: #e9ecef; height: 30px; border-radius: 4px; overflow: hidden; margin: 0 10px; }
+        .bar-fill { background: linear-gradient(90deg, #007bff, #0056b3); height: 100%; display: flex; align-items: center; padding-left: 10px; color: white; font-size: 12px; font-weight: bold; }
+        .no-data { color: #999; font-style: italic; text-align: center; padding: 40px; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; }
+        .back-link:hover { text-decoration: underline; }
+        .short-url { color: #007bff; word-break: break-all; }
+        .chart { margin: 20px 0; }
+        .day-item { display: flex; align-items: center; margin: 8px 0; }
+        .day-date { width: 120px; font-size: 14px; color: #666; }
+        .day-bar { flex: 1; background: #e9ecef; height: 24px; border-radius: 4px; overflow: hidden; margin: 0 10px; }
+        .day-fill { background: #28a745; height: 100%; display: flex; align-items: center; padding-left: 8px; color: white; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <a href="/dashboard" class="back-link">← Back to Dashboard</a>
+    
+    <div class="header">
+        <h1>Analytics for {{.URL.ShortCode}}</h1>
+        <div class="url-info">
+            <p><strong>Short URL:</strong> <span class="short-url">{{.URL.ShortCode}}</span></p>
+            <p><strong>Original URL:</strong> <span class="short-url">{{.URL.OriginalURL}}</span></p>
+            <p><strong>Created:</strong> {{.URL.CreatedAt.Format "Jan 2, 2006 15:04"}}</p>
+            {{if .URL.ExpiresAt}}<p><strong>Expires:</strong> {{.URL.ExpiresAt.Format "Jan 2, 2006 15:04"}}</p>{{end}}
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <h3>Total Clicks</h3>
+            <p class="value">{{.TotalClicks}}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Unique Visitors</h3>
+            <p class="value">{{.UniqueVisitors}}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Countries</h3>
+            <p class="value">{{len .ClicksByCountry}}</p>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Clicks by Country</h2>
+        {{if .ClicksByCountry}}
+        <div class="chart">
+            {{range $country, $count := .ClicksByCountry}}
+            <div class="country-bar">
+                <div class="country-name">{{$country}}</div>
+                <div class="bar-container">
+                    <div class="bar-fill" style="width: {{div (mul $count 100) $.TotalClicks}}%">
+                        {{$count}} clicks
+                    </div>
+                </div>
+            </div>
+            {{end}}
+        </div>
+        {{else}}
+        <p class="no-data">No geographic data available yet</p>
+        {{end}}
+    </div>
+
+    <div class="section">
+        <h2>Clicks Over Time (Last 30 Days)</h2>
+        {{if .ClicksByDay}}
+        <div class="chart">
+            {{range .ClicksByDay}}
+            <div class="day-item">
+                <div class="day-date">{{.Date}}</div>
+                <div class="day-bar">
+                    <div class="day-fill" style="width: {{div (mul .Clicks 100) $.TotalClicks}}%">
+                        {{.Clicks}}
+                    </div>
+                </div>
+            </div>
+            {{end}}
+        </div>
+        {{else}}
+        <p class="no-data">No click history available yet</p>
+        {{end}}
+    </div>
+
+    <div class="section">
+        <h2>Recent Clicks</h2>
+        {{if .RecentClicks}}
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>IP Address</th>
+                    <th>Location</th>
+                    <th>User Agent</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .RecentClicks}}
+                <tr>
+                    <td>{{.ClickedAt.Format "Jan 2, 15:04:05"}}</td>
+                    <td>{{.IPAddress}}</td>
+                    <td>{{if .Country}}{{.City}}, {{.Country}}{{else}}Unknown{{end}}</td>
+                    <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{.UserAgent}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <p class="no-data">No clicks recorded yet</p>
+        {{end}}
+    </div>
+</body>
+</html>`
+
+	t := template.New("analytics")
+	t.Funcs(template.FuncMap{
+		"div": func(a, b int) int {
+			if b == 0 {
+				return 0
+			}
+			return a / b
+		},
+		"mul": func(a, b int) int {
+			return a * b
+		},
+	})
+	t, _ = t.Parse(tmpl)
+	t.Execute(w, analytics)
+}
+
 func (h *URLHandler) getClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		ips := strings.Split(xff, ",")
@@ -360,9 +506,22 @@ func (h *URLHandler) getClientIP(r *http.Request) string {
 	}
 
 	ip := r.RemoteAddr
-	if strings.Contains(ip, ":") {
-		ip = strings.Split(ip, ":")[0]
+	
+	// Handle IPv6 addresses like [::1]:port
+	if strings.HasPrefix(ip, "[") {
+		// Extract IP from [ip]:port format
+		endBracket := strings.Index(ip, "]")
+		if endBracket > 0 {
+			return ip[1:endBracket]
+		}
 	}
+	
+	// Handle IPv4 addresses like 127.0.0.1:port
+	if strings.Contains(ip, ":") {
+		lastColon := strings.LastIndex(ip, ":")
+		return ip[:lastColon]
+	}
+	
 	return ip
 }
 
