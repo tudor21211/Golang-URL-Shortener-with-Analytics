@@ -30,15 +30,13 @@ func main() {
 	api.HandleFunc("/shorten", urlHandler.ShortenURL).Methods("POST")
 	api.HandleFunc("/analytics/{shortCode}", urlHandler.GetAnalytics).Methods("GET")
 	api.HandleFunc("/urls", urlHandler.GetUserURLs).Methods("GET")
+	api.HandleFunc("/qr/{shortCode}", urlHandler.GenerateQRCode).Methods("GET")
 
-	// Redirect route (no rate limiting for redirects)
-	router.HandleFunc("/{shortCode}", urlHandler.RedirectURL).Methods("GET")
-
-	// Web interface routes
 	router.HandleFunc("/", urlHandler.HomePage).Methods("GET")
 	router.HandleFunc("/dashboard", urlHandler.Dashboard).Methods("GET")
-  
 	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./web/static/"))))
+	
+	router.HandleFunc("/{shortCode}", urlHandler.RedirectURL).Methods("GET")
 
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", router))

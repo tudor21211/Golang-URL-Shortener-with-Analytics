@@ -12,6 +12,7 @@ import (
 	"url-shortener/internal/services"
 
 	"github.com/gorilla/mux"
+	"github.com/skip2/go-qrcode"
 )
 
 type URLHandler struct {
@@ -127,6 +128,34 @@ func (h *URLHandler) GetUserURLs(w http.ResponseWriter, r *http.Request) {
 	h.respondWithJSON(w, http.StatusOK, urls)
 }
 
+func (h *URLHandler) GenerateQRCode(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	shortCode := vars["shortCode"]
+
+	if shortCode == "" {
+		h.respondWithError(w, http.StatusBadRequest, "Missing short code", "")
+		return
+	}
+
+	_, err := h.urlService.GetOriginalURL(shortCode)
+	if err != nil {
+		h.respondWithError(w, http.StatusNotFound, "URL not found", err.Error())
+		return
+	}
+
+	shortURL := fmt.Sprintf("%s://%s/%s", h.getScheme(r), r.Host, shortCode)
+	
+	png, err := qrcode.Encode(shortURL, qrcode.Medium, 256)
+	if err != nil {
+		h.respondWithError(w, http.StatusInternalServerError, "Failed to generate QR code", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s-qr.png", shortCode))
+	w.Write(png)
+}
+
 // HomePage handles GET / - i added a simple web interface, maybe will change it in the future
 func (h *URLHandler) HomePage(w http.ResponseWriter, r *http.Request) {
 	tmpl := `
@@ -200,6 +229,8 @@ func (h *URLHandler) HomePage(w http.ResponseWriter, r *http.Request) {
                             <p><strong>Short URL:</strong> <a href="${data.short_url}" target="_blank">${data.short_url}</a></p>
                             <p><strong>Original URL:</strong> ${data.original_url}</p>
                             <p><strong>Created:</strong> ${new Date(data.created_at).toLocaleString()}</p>
+                            <p><strong>QR Code:</strong> <a href="/api/v1/qr/${data.short_code}" target="_blank">Download QR Code</a></p>
+                            <p><img src="/api/v1/qr/${data.short_code}" alt="QR Code" style="margin-top: 10px; border: 1px solid #ddd; padding: 10px;"></p>
                         </div>
                     ` + "`" + `;
                 } else {
@@ -244,8 +275,10 @@ func (h *URLHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
         th { background-color: #f2f2f2; }
         .short-url { color: #007bff; text-decoration: none; }
         .short-url:hover { text-decoration: underline; }
-        .analytics-btn { padding: 5px 10px; background: #28a745; color: white; text-decoration: none; border-radius: 3px; }
+        .analytics-btn { padding: 5px 10px; background: #28a745; color: white; text-decoration: none; border-radius: 3px; margin-right: 5px; }
         .analytics-btn:hover { background: #218838; }
+        .qr-btn { padding: 5px 10px; background: #17a2b8; color: white; text-decoration: none; border-radius: 3px; }
+        .qr-btn:hover { background: #138496; }
     </style>
 </head>
 <body>
@@ -270,7 +303,10 @@ func (h *URLHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
                 <td>{{.OriginalURL}}</td>
                 <td>{{.ClickCount}}</td>
                 <td>{{.CreatedAt.Format "Jan 2, 2006 15:04"}}</td>
-                <td><a href="/api/v1/analytics/{{.ShortCode}}" class="analytics-btn" target="_blank">Analytics</a></td>
+                <td>
+                    <a href="/api/v1/analytics/{{.ShortCode}}" class="analytics-btn" target="_blank">Analytics</a>
+                    <a href="/api/v1/qr/{{.ShortCode}}" class="qr-btn" target="_blank">QR Code</a>
+                </td>
             </tr>
             {{end}}
         </tbody>
