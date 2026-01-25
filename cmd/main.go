@@ -6,8 +6,9 @@ import (
 
 	"url-shortener/internal/database"
 	"url-shortener/internal/handlers"
-	"url-shortener/internal/services"
 	"url-shortener/internal/middleware"
+	"url-shortener/internal/services"
+
 	"github.com/gorilla/mux"
 )
 
@@ -39,6 +40,8 @@ func main() {
 	router.HandleFunc("/dashboard", urlHandler.Dashboard).Methods("GET")
   
 	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./web/static/"))))
+
+	router.HandleFunc("/{shortCode}", urlHandler.RedirectURL).Methods("GET")
 
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", router))

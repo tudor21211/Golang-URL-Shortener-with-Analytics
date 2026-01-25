@@ -127,6 +127,34 @@ func (h *URLHandler) GetUserURLs(w http.ResponseWriter, r *http.Request) {
 	h.respondWithJSON(w, http.StatusOK, urls)
 }
 
+func (h *URLHandler) GenerateQRCode(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	shortCode := vars["shortCode"]
+
+	if shortCode == "" {
+		h.respondWithError(w, http.StatusBadRequest, "Missing short code", "")
+		return
+	}
+
+	_, err := h.urlService.GetOriginalURL(shortCode)
+	if err != nil {
+		h.respondWithError(w, http.StatusNotFound, "URL not found", err.Error())
+		return
+	}
+
+	shortURL := fmt.Sprintf("%s://%s/%s", h.getScheme(r), r.Host, shortCode)
+
+	png, err := qrcode.Encode(shortURL, qrcode.Medium, 256)
+	if err != nil {
+		h.respondWithError(w, http.StatusInternalServerError, "Failed to generate QR code", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s-qr.png", shortCode))
+	w.Write(png)
+}
+
 // HomePage handles GET / - i added a simple web interface, maybe will change it in the future
 func (h *URLHandler) HomePage(w http.ResponseWriter, r *http.Request) {
 	tmpl := `
@@ -284,7 +312,6 @@ func (h *URLHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	t, _ := template.New("dashboard").Parse(tmpl)
 	t.Execute(w, urls)
 }
-
 
 func (h *URLHandler) getClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {

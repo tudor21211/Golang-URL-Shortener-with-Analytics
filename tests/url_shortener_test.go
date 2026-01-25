@@ -311,3 +311,42 @@ func TestCORSMiddleware(t *testing.T) {
 		t.Error("CORS methods should include GET")
 	}
 }
+
+func TestQRCodeGeneration(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	urlSvc := services.NewURLService(db)
+	analyticsSvc := services.NewAnalyticsService(db)
+	handler := handlers.NewURLHandler(urlSvc, analyticsSvc)
+
+	req := models.ShortenURLRequest{
+		OriginalURL: "https://example.com/qrtest",
+		CustomCode:  "qrtest",
+	}
+	urlSvc.ShortenURL(req, "127.0.0.1")
+
+	httpReq := httptest.NewRequest("GET", "/api/v1/qr/qrtest", nil)
+	httpReq = httpReq.WithContext(httpReq.Context())
+	rr := httptest.NewRecorder()
+
+	handler.GenerateQRCode(rr, httpReq)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	contentType := rr.Header().Get("Content-Type")
+	if contentType != "image/png" {
+		t.Errorf("content type = %s, want image/png", contentType)
+	}
+
+	if rr.Body.Len() == 0 {
+		t.Error("QR code should have content")
+	}
+
+	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47}
+	if !bytes.HasPrefix(rr.Body.Bytes(), pngHeader) {
+		t.Error("response should be a valid PNG image")
+	}
+}
