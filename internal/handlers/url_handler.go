@@ -128,7 +128,6 @@ func (h *URLHandler) GetUserURLs(w http.ResponseWriter, r *http.Request) {
 	h.respondWithJSON(w, http.StatusOK, urls)
 }
 
-
 func (h *URLHandler) GenerateQRCode(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	shortCode := vars["shortCode"]
@@ -145,7 +144,7 @@ func (h *URLHandler) GenerateQRCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	shortURL := fmt.Sprintf("%s://%s/%s", h.getScheme(r), r.Host, shortCode)
-	
+
 	png, err := qrcode.Encode(shortURL, qrcode.Medium, 256)
 	if err != nil {
 		h.respondWithError(w, http.StatusInternalServerError, "Failed to generate QR code", err.Error())
@@ -169,12 +168,14 @@ func (h *URLHandler) HomePage(w http.ResponseWriter, r *http.Request) {
     <style>
         body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
         .container { text-align: center; }
-        input[type="url"], input[type="text"] { width: 300px; padding: 10px; margin: 5px; }
+        input[type="url"], input[type="text"], input[type="datetime-local"], select { width: 300px; padding: 10px; margin: 5px; }
         button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
         button:hover { background: #0056b3; }
         .result { margin: 20px 0; padding: 20px; background: #f8f9fa; border-radius: 5px; }
         .error { color: red; }
         .success { color: green; }
+        .form-group { margin: 10px 0; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -183,11 +184,26 @@ func (h *URLHandler) HomePage(w http.ResponseWriter, r *http.Request) {
         <p>Convert your long URLs into short, manageable links</p>
         
         <form id="shortenForm">
-            <div>
+            <div class="form-group">
                 <input type="url" id="originalUrl" placeholder="Enter your long URL here..." required>
             </div>
-            <div>
+            <div class="form-group">
                 <input type="text" id="customCode" placeholder="Custom short code (optional)">
+            </div>
+            <div class="form-group">
+                <label for="expirationOption">Expiration (optional):</label>
+                <select id="expirationOption">
+                    <option value="">Never expires</option>
+                    <option value="1h">1 hour</option>
+                    <option value="24h">24 hours</option>
+                    <option value="7d">7 days</option>
+                    <option value="30d">30 days</option>
+                    <option value="custom">Custom date/time</option>
+                </select>
+            </div>
+            <div class="form-group" id="customExpirationDiv" style="display: none;">
+                <label for="customExpiration">Custom expiration date:</label>
+                <input type="datetime-local" id="customExpiration">
             </div>
             <div>
                 <button type="submit">Shorten URL</button>
@@ -202,34 +218,80 @@ func (h *URLHandler) HomePage(w http.ResponseWriter, r *http.Request) {
     </div>
 
     <script>
+        // Show/hide custom expiration date input
+        document.getElementById('expirationOption').addEventListener('change', (e) => {
+            const customDiv = document.getElementById('customExpirationDiv');
+            if (e.target.value === 'custom') {
+                customDiv.style.display = 'block';
+            } else {
+                customDiv.style.display = 'none';
+            }
+        });
+
         document.getElementById('shortenForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const originalUrl = document.getElementById('originalUrl').value;
             const customCode = document.getElementById('customCode').value;
+            const expirationOption = document.getElementById('expirationOption').value;
+            const customExpiration = document.getElementById('customExpiration').value;
             const resultDiv = document.getElementById('result');
             
+            // Calculate expiration date
+            let expiresAt = null;
+            if (expirationOption) {
+                if (expirationOption === 'custom' && customExpiration) {
+                    expiresAt = new Date(customExpiration).toISOString();
+                } else if (expirationOption !== 'custom') {
+                    const now = new Date();
+                    switch (expirationOption) {
+                        case '1h':
+                            now.setHours(now.getHours() + 1);
+                            break;
+                        case '24h':
+                            now.setHours(now.getHours() + 24);
+                            break;
+                        case '7d':
+                            now.setDate(now.getDate() + 7);
+                            break;
+                        case '30d':
+                            now.setDate(now.getDate() + 30);
+                            break;
+                    }
+                    expiresAt = now.toISOString();
+                }
+            }
+            
             try {
+                const requestBody = {
+                    original_url: originalUrl,
+                    custom_code: customCode || undefined,
+                    expires_at: expiresAt
+                };
+
                 const response = await fetch('/api/v1/shorten', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        original_url: originalUrl,
-                        custom_code: customCode || undefined
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const data = await response.json();
                 
                 if (response.ok) {
+                    let expirationInfo = '';
+                    if (data.expires_at) {
+                        expirationInfo = ` + "`" + `<p><strong>Expires:</strong> ${new Date(data.expires_at).toLocaleString()}</p>` + "`" + `;
+                    }
+                    
                     resultDiv.innerHTML = ` + "`" + `
                         <div class="success">
                             <h3>Success!</h3>
                             <p><strong>Short URL:</strong> <a href="${data.short_url}" target="_blank">${data.short_url}</a></p>
                             <p><strong>Original URL:</strong> ${data.original_url}</p>
                             <p><strong>Created:</strong> ${new Date(data.created_at).toLocaleString()}</p>
+                            ${expirationInfo}
                             <p><strong>QR Code:</strong> <a href="/api/v1/qr/${data.short_code}" target="_blank">Download QR Code</a></p>
                             <p><img src="/api/v1/qr/${data.short_code}" alt="QR Code" style="margin-top: 10px; border: 1px solid #ddd; padding: 10px;"></p>
                         </div>
@@ -270,16 +332,26 @@ func (h *URLHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
-        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        body { font-family: Arial, sans-serif; max-width: 1400px; margin: 0 auto; padding: 20px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; table-layout: fixed; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; word-wrap: break-word; }
         th { background-color: #f2f2f2; }
+        th:nth-child(1) { width: 10%; } /* Short Code */
+        th:nth-child(2) { width: 35%; } /* Original URL */
+        th:nth-child(3) { width: 8%; } /* Clicks */
+        th:nth-child(4) { width: 15%; } /* Created */
+        th:nth-child(5) { width: 15%; } /* Expires */
+        th:nth-child(6) { width: 17%; } /* Actions */
         .short-url { color: #007bff; text-decoration: none; }
         .short-url:hover { text-decoration: underline; }
-        .analytics-btn { padding: 5px 10px; background: #28a745; color: white; text-decoration: none; border-radius: 3px; margin-right: 5px; }
+        .url-cell { overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+        .analytics-btn { padding: 5px 10px; background: #28a745; color: white; text-decoration: none; border-radius: 3px; margin: 2px; display: inline-block; font-size: 12px; }
         .analytics-btn:hover { background: #218838; }
-        .qr-btn { padding: 5px 10px; background: #17a2b8; color: white; text-decoration: none; border-radius: 3px; }
+        .qr-btn { padding: 5px 10px; background: #17a2b8; color: white; text-decoration: none; border-radius: 3px; margin: 2px; display: inline-block; font-size: 12px; }
         .qr-btn:hover { background: #138496; }
+        .expired { color: #dc3545; font-weight: bold; }
+        .expires-soon { color: #ffc107; }
+        .actions-cell { white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -294,6 +366,7 @@ func (h *URLHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
                 <th>Original URL</th>
                 <th>Clicks</th>
                 <th>Created</th>
+                <th>Expires</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -301,10 +374,17 @@ func (h *URLHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
             {{range .}}
             <tr>
                 <td><a href="/{{.ShortCode}}" class="short-url" target="_blank">{{.ShortCode}}</a></td>
-                <td>{{.OriginalURL}}</td>
+                <td class="url-cell" title="{{.OriginalURL}}">{{.OriginalURL}}</td>
                 <td>{{.ClickCount}}</td>
                 <td>{{.CreatedAt.Format "Jan 2, 2006 15:04"}}</td>
                 <td>
+                    {{if .ExpiresAt}}
+                        {{.ExpiresAt.Format "Jan 2, 2006 15:04"}}
+                    {{else}}
+                        Never
+                    {{end}}
+                </td>
+                <td class="actions-cell">
                     <a href="/analytics/{{.ShortCode}}" class="analytics-btn">Analytics</a>
                     <a href="/api/v1/qr/{{.ShortCode}}" class="qr-btn" target="_blank">QR Code</a>
                 </td>
@@ -506,7 +586,7 @@ func (h *URLHandler) getClientIP(r *http.Request) string {
 	}
 
 	ip := r.RemoteAddr
-	
+
 	// Handle IPv6 addresses like [::1]:port
 	if strings.HasPrefix(ip, "[") {
 		// Extract IP from [ip]:port format
@@ -515,13 +595,13 @@ func (h *URLHandler) getClientIP(r *http.Request) string {
 			return ip[1:endBracket]
 		}
 	}
-	
+
 	// Handle IPv4 addresses like 127.0.0.1:port
 	if strings.Contains(ip, ":") {
 		lastColon := strings.LastIndex(ip, ":")
 		return ip[:lastColon]
 	}
-	
+
 	return ip
 }
 
